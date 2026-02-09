@@ -12,8 +12,7 @@ from PIL import Image
 import io
 
 
-def open_websocket_connection():
-  server_address='127.0.0.1:8188'
+def open_websocket_connection(server_address='127.0.0.1:8188'):
   client_id=str(uuid.uuid4())
   ws = websocket.WebSocket()
   ws.connect("ws://{}/ws?clientId={}".format(server_address, client_id))
@@ -66,7 +65,7 @@ def load_workflow(workflow_path):
   
 
 
-def prompt_to_image(workflow, positve_prompt, negative_prompt='', save_previews=False):
+def prompt_to_image(workflow, positve_prompt, negative_prompt='', save_previews=False, return_images=False, server_address='127.0.0.1:8188'):
   prompt = json.loads(workflow)
   id_to_class_type = {id: details['class_type'] for id, details in prompt.items()}
   k_sampler = [key for key, value in id_to_class_type.items() if value == 'KSampler'][0]
@@ -78,16 +77,29 @@ def prompt_to_image(workflow, positve_prompt, negative_prompt='', save_previews=
     negative_input_id = prompt.get(k_sampler)['inputs']['negative'][0]
     prompt.get(negative_input_id)['inputs']['text'] = negative_prompt
 
-  generate_image_by_prompt(prompt, './output/', save_previews)
+  return generate_image_by_prompt(prompt, './output/', save_previews, return_images, server_address)
 
 
-def generate_image_by_prompt(prompt, output_path, save_previews=False):
+def generate_image_by_prompt(prompt, output_path=None, save_previews=False, return_images=False, server_address='127.0.0.1:8188'):
   try:
-    ws, server_address, client_id = open_websocket_connection()
+    ws, server_address, client_id = open_websocket_connection(server_address)
     prompt_id = queue_prompt(prompt, client_id, server_address)['prompt_id']
     track_progress(prompt, ws, prompt_id)
     images = get_images(prompt_id, server_address, save_previews)
-    save_image(images, output_path, save_previews)
+
+    if return_images:
+      # Return image bytes instead of saving
+      image_bytes_list = []
+      for itm in images:
+        if 'image_data' in itm:
+          image_bytes_list.append(itm['image_data'])
+      return image_bytes_list
+    else:
+      # Save to disk (original behavior)
+      if output_path is None:
+        output_path = './output/'
+      save_image(images, output_path, save_previews)
+      return None
   finally:
     ws.close()
 
@@ -151,7 +163,34 @@ def save_image(images, output_path, save_previews):
           image = Image.open(io.BytesIO(itm['image_data']))
           image.save(os.path.join(directory, itm['file_name']))
       except Exception as e:
-          print(f"Failed to save image {itm['file_name']}: {e}")  
+          print(f"Failed to save image {itm['file_name']}: {e}")
+
+
+def image_to_base64(image_bytes):
+  """Convert image bytes to base64 encoded string."""
+  import base64
+  return base64.b64encode(image_bytes).decode('utf-8')
+
+
+def generate_image_in_memory(prompt_text, workflow_path="z_image_turbo.json", server_address="127.0.0.1:8188"):
+  """Generate image from prompt and return image bytes."""
+  workflow = load_workflow(workflow_path)
+  if workflow is None:
+    raise ValueError(f"Failed to load workflow from {workflow_path}")
+
+  image_bytes_list = prompt_to_image(
+    workflow,
+    prompt_text,
+    negative_prompt='',
+    save_previews=False,
+    return_images=True,
+    server_address=server_address
+  )
+
+  if image_bytes_list and len(image_bytes_list) > 0:
+    return image_bytes_list[0]  # Return first image
+  else:
+    raise RuntimeError("No images generated")
 
 
 if __name__ == "__main__":
