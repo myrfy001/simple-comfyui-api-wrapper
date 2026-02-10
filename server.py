@@ -4,6 +4,7 @@ import os
 import websocket
 import uuid
 import json
+import re
 import urllib.request
 import urllib.parse
 import random
@@ -172,11 +173,67 @@ def image_to_base64(image_bytes):
   return base64.b64encode(image_bytes).decode('utf-8')
 
 
-def generate_image_in_memory(prompt_text, workflow_path="z_image_turbo.json", server_address="127.0.0.1:8188"):
-  """Generate image from prompt and return image bytes."""
+def update_workflow_size(workflow_json, size_str):
+  """Update the size parameters in a workflow JSON string.
+
+  Args:
+    workflow_json: JSON string of the workflow
+    size_str: Size string in format "WIDTHxHEIGHT" (e.g., "256x256", "512x512")
+
+  Returns:
+    Modified workflow JSON string
+
+  Raises:
+    ValueError: If size_str is invalid or EmptySD3LatentImage node not found
+  """
+  # Parse size string
+  match = re.match(r'^(\d+)x(\d+)$', size_str)
+  if not match:
+    raise ValueError(f"Invalid size format: '{size_str}'. Expected format: 'WIDTHxHEIGHT'")
+
+  width = int(match.group(1))
+  height = int(match.group(2))
+
+  # Parse workflow JSON
+  workflow = json.loads(workflow_json)
+
+  # Find EmptySD3LatentImage node
+  empty_latent_nodes = [
+    node_id for node_id, node_data in workflow.items()
+    if node_data.get('class_type') == 'EmptySD3LatentImage'
+  ]
+
+  if not empty_latent_nodes:
+    raise ValueError("No EmptySD3LatentImage node found in workflow")
+
+  # Update all EmptySD3LatentImage nodes (typically there's just one)
+  for node_id in empty_latent_nodes:
+    workflow[node_id]['inputs']['width'] = width
+    workflow[node_id]['inputs']['height'] = height
+
+  # Return modified workflow as JSON string
+  return json.dumps(workflow)
+
+
+def generate_image_in_memory(prompt_text, workflow_path="z_image_turbo.json", server_address="127.0.0.1:8188", size=None):
+  """Generate image from prompt and return image bytes.
+
+  Args:
+    prompt_text: Text prompt for image generation
+    workflow_path: Path to workflow JSON file
+    server_address: ComfyUI server address
+    size: Optional size string in format "WIDTHxHEIGHT" (e.g., "256x256")
+
+  Returns:
+    Image bytes
+  """
   workflow = load_workflow(workflow_path)
   if workflow is None:
     raise ValueError(f"Failed to load workflow from {workflow_path}")
+
+  # Update workflow size if specified
+  if size is not None:
+    workflow = update_workflow_size(workflow, size)
 
   image_bytes_list = prompt_to_image(
     workflow,
