@@ -1,0 +1,29 @@
+{
+  "model_backends": {
+    "my_z_image_turbo": {
+      "description": "z_image_tubro",
+      "workflow": "z_image_turbo.json",
+      "backends": [
+        "127.0.0.1:8188",
+        "127.0.0.1:8188"
+      ],
+      "fixed_size": "256x256",
+      "default_model": "my_z_image_turbo"
+    },
+    "my_ltx_video": {
+      "description": "ltx-video",
+      "workflow": "ltx-video-t2v.json",
+      "backends": [
+        "127.0.0.1:8188",
+        "127.0.0.1:8188"
+      ],
+      "fixed_size": "256x256",
+      "default_model": "my_ltx_video"
+    }
+  },
+  "default_model": "dall-e-3",
+  "model_aliases": {
+    "dall-e": "dall-e-3",
+    "sora": "sora-2"
+  }
+}

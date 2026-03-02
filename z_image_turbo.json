@@ -109,7 +109,7 @@
   "57:3": {
     "inputs": {
       "seed": 687542598548517,
-      "steps": 2,
+      "steps": 4,
       "cfg": 1,
       "sampler_name": "res_multistep",
       "scheduler": "simple",
