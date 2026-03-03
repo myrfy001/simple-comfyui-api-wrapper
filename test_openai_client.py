@@ -5,7 +5,7 @@ This script demonstrates how to use the official OpenAI Python SDK
 to interact with our ComfyUI-based image generation API server.
 
 Usage:
-1. Start the API server: python api_server.py
+1. Start the API server: python unified_api_server.py
 2. Run this test: python test_openai_client.py
 """
 
@@ -215,9 +215,9 @@ if __name__ == "__main__":
     print("OpenAI Client Compatibility Test")
     print("=" * 60)
     print("Note: Make sure the API server is running:")
-    print("  python api_server.py")
+    print("  python unified_api_server.py")
     print("Or with custom port:")
-    print("  API_PORT=9997 python api_server.py")
+    print("  API_PORT=9997 python unified_api_server.py")
     print("Then update api_base in this script if needed.")
     print()
 
@@ -234,7 +234,7 @@ if __name__ == "__main__":
             sys.exit(1)
     except requests.exceptions.ConnectionError:
         print("✗ Cannot connect to API server at http://localhost:5000")
-        print("  Please start the server with: python api_server.py")
+        print("  Please start the server with: python unified_api_server.py")
         print("  Or if using a different port, update the api_base variable.")
         sys.exit(1)
 

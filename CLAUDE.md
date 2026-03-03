@@ -88,7 +88,7 @@ An HTTP server implementing OpenAI Images API compatibility has been added to th
 
 ### Files
 
-1. **`api_server.py`** - Flask-based HTTP server implementing OpenAI Images API
+1. **`unified_api_server.py`** - Flask-based HTTP server implementing OpenAI Images and Video APIs
    - Endpoint: `POST /v1/images/generations`
    - Returns: OpenAI-compatible JSON responses with base64-encoded images
    - Validation: Request validation with OpenAI-style error responses
@@ -118,13 +118,13 @@ An HTTP server implementing OpenAI Images API compatibility has been added to th
 pip install -r requirements.txt
 
 # Start the server (default: http://0.0.0.0:5000)
-python api_server.py
+python unified_api_server.py
 
 # Or with custom configuration
 COMFYUI_SERVER_ADDRESS="127.0.0.1:8188" \
 API_HOST="0.0.0.0" \
 API_PORT=5000 \
-python api_server.py
+python unified_api_server.py
 ```
 
 ### Testing the API

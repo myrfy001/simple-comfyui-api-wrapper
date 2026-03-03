@@ -38,7 +38,7 @@
     },
     "class_type": "VAEDecode",
     "_meta": {
-      "title": "VAE解码"
+      "title": "VAE Decode"
     }
   },
   "38": {
@@ -49,24 +49,7 @@
     },
     "class_type": "CLIPLoader",
     "_meta": {
-      "title": "加载CLIP"
-    }
-  },
-  "41": {
-    "inputs": {
-      "filename_prefix": "ComfyUI",
-      "fps": 24,
-      "lossless": false,
-      "quality": 95,
-      "method": "default",
-      "images": [
-        "8",
-        0
-      ]
-    },
-    "class_type": "SaveAnimatedWEBP",
-    "_meta": {
-      "title": "保存动画（WEBP）"
+      "title": "Load CLIP"
     }
   },
   "44": {
@@ -75,7 +58,7 @@
     },
     "class_type": "CheckpointLoaderSimple",
     "_meta": {
-      "title": "Checkpoint加载器（简易）"
+      "title": "Load Checkpoint"
     }
   },
   "69": {
@@ -92,7 +75,7 @@
     },
     "class_type": "LTXVConditioning",
     "_meta": {
-      "title": "LTXV条件"
+      "title": "LTXVConditioning"
     }
   },
   "70": {
@@ -104,7 +87,7 @@
     },
     "class_type": "EmptyLTXVLatentVideo",
     "_meta": {
-      "title": "空Latent视频（LTXV）"
+      "title": "EmptyLTXVLatentVideo"
     }
   },
   "71": {
@@ -121,7 +104,7 @@
     },
     "class_type": "LTXVScheduler",
     "_meta": {
-      "title": "LTXV调度器"
+      "title": "LTXVScheduler"
     }
   },
   "72": {
@@ -156,7 +139,7 @@
     },
     "class_type": "SamplerCustom",
     "_meta": {
-      "title": "自定义采样器"
+      "title": "SamplerCustom"
     }
   },
   "73": {
@@ -165,7 +148,35 @@
     },
     "class_type": "KSamplerSelect",
     "_meta": {
-      "title": "K采样器选择"
+      "title": "KSamplerSelect"
+    }
+  },
+  "75": {
+    "inputs": {
+      "fps": 24,
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "CreateVideo",
+    "_meta": {
+      "title": "Create Video"
+    }
+  },
+  "76": {
+    "inputs": {
+      "filename_prefix": "video/ComfyUI",
+      "format": "mp4",
+      "codec": "h264",
+      "video": [
+        "75",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
     }
   }
 }

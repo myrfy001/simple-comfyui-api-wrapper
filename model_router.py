@@ -311,7 +311,8 @@ class VideoModelBackendConfig(ModelBackendConfig):
             video_bytes = self.generate_video_in_memory(
                 prompt_text=prompt,
                 workflow_path=self.workflow,
-                server_address=backend['address']
+                server_address=backend['address'],
+                task_id=job_data['job_id']  # Pass job ID for cleanup tracking
             )
 
             # Update job result

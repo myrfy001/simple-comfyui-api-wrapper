@@ -65,7 +65,7 @@ def test_server_functions():
 def test_api_server():
     """Test the API server via HTTP requests."""
     print("\nTesting API server (requires server to be running)...")
-    print("Start the server with: python api_server.py")
+    print("Start the server with: python unified_api_server.py")
     print("Then run: python test_api.py --api-test")
     print("\nOr use curl to test:")
     print('''

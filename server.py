@@ -131,7 +131,7 @@ def prompt_to_image(workflow, positive_prompt, negative_prompt='', save_previews
     return generate_image_by_prompt(prompt, './output/', save_previews, return_images, server_address)
 
 
-def generate_by_prompt(prompt, server_address='127.0.0.1:8188', output_type='image', save_previews=False, return_data=False, output_path=None):
+def generate_by_prompt(prompt, server_address='127.0.0.1:8188', output_type='image', save_previews=False, return_data=False, output_path=None, task_id=None):
     """Generic function to generate content (image/video) from prompt.
 
     Args:
@@ -141,6 +141,7 @@ def generate_by_prompt(prompt, server_address='127.0.0.1:8188', output_type='ima
         save_previews: Whether to save previews
         return_data: Whether to return data bytes instead of saving
         output_path: Output directory path
+        task_id: Optional task ID for video cleanup tracking
 
     Returns:
         List of data bytes if return_data=True, otherwise None
@@ -179,7 +180,7 @@ def generate_by_prompt(prompt, server_address='127.0.0.1:8188', output_type='ima
                 # Save to disk
                 if output_path is None:
                     output_path = './output/'
-                save_video(outputs, output_path)
+                save_video(outputs, output_path, task_id)
                 return None
         else:
             raise ValueError(f"Unsupported output_type: {output_type}")
@@ -400,13 +401,15 @@ def save_image(images, output_path, save_previews):
             print(f"Failed to save image {itm['file_name']}: {e}")
 
 
-def save_video(videos, output_path):
-    """Save videos to disk.
+def save_video(videos, output_path, task_id=None):
+    """Save videos to disk and register for lazy cleanup.
 
     Args:
         videos: List of video data dictionaries
         output_path: Output directory path
+        task_id: Optional task ID for cleanup tracking
     """
+    saved_files = []
     for itm in videos:
         os.makedirs(output_path, exist_ok=True)
         try:
@@ -414,8 +417,15 @@ def save_video(videos, output_path):
             with open(file_path, 'wb') as f:
                 f.write(itm['video_data'])
             print(f"Saved video: {file_path}")
+            saved_files.append(file_path)
+
+            # Register for lazy cleanup if task_id is provided
+            if task_id:
+                task_manager.register_video_file(task_id, file_path)
         except Exception as e:
             print(f"Failed to save video {itm['file_name']}: {e}")
+
+    return saved_files
 
 
 def image_to_base64(image_bytes):
@@ -501,7 +511,7 @@ def generate_image_in_memory(prompt_text, workflow_path="z_image_turbo.json", se
         raise RuntimeError("No images generated")
 
 
-def prompt_to_video(workflow, positive_prompt, negative_prompt='', return_videos=False, server_address='127.0.0.1:8188'):
+def prompt_to_video(workflow, positive_prompt, negative_prompt='', return_videos=False, server_address='127.0.0.1:8188', task_id=None):
     """Generate video from prompt using video workflow.
 
     Args:
@@ -510,6 +520,7 @@ def prompt_to_video(workflow, positive_prompt, negative_prompt='', return_videos
         negative_prompt: Negative prompt text (optional)
         return_videos: Whether to return video bytes instead of saving
         server_address: ComfyUI server address
+        task_id: Optional task ID for video cleanup tracking
 
     Returns:
         List of video bytes if return_videos=True, otherwise None
@@ -521,17 +532,19 @@ def prompt_to_video(workflow, positive_prompt, negative_prompt='', return_videos
         output_type='video',
         save_previews=False,
         return_data=return_videos,
-        output_path='./output/'
+        output_path='./output/',
+        task_id=task_id
     )
 
 
-def generate_video_in_memory(prompt_text, workflow_path="ltx-video-t2v.json", server_address="127.0.0.1:8188"):
+def generate_video_in_memory(prompt_text, workflow_path="ltx-video-t2v.json", server_address="127.0.0.1:8188", task_id=None):
     """Generate video from prompt and return video bytes.
 
     Args:
         prompt_text: Text prompt for video generation
         workflow_path: Path to workflow JSON file
         server_address: ComfyUI server address
+        task_id: Optional task ID for video cleanup tracking
 
     Returns:
         Video bytes
@@ -555,7 +568,8 @@ def generate_video_in_memory(prompt_text, workflow_path="ltx-video-t2v.json", se
             prompt_text,
             negative_prompt='',
             return_videos=True,
-            server_address=server_address
+            server_address=server_address,
+            task_id=task_id
         )
 
         logging.info(f"[generate_video_in_memory] prompt_to_video returned {len(video_bytes_list) if video_bytes_list else 0} videos")
@@ -623,9 +637,15 @@ class TaskManager:
 
     def __init__(self):
         self.tasks: Dict[str, Task] = {}
+        self.video_files: Dict[str, Dict[str, Any]] = {}  # Track video files for lazy cleanup
         self.lock = threading.Lock()
+
+        # Start cleanup threads
         self.cleanup_thread = threading.Thread(target=self._cleanup_old_tasks, daemon=True)
         self.cleanup_thread.start()
+
+        self.video_cleanup_thread = threading.Thread(target=self._cleanup_old_video_files, daemon=True)
+        self.video_cleanup_thread.start()
 
     def create_task(self, task_type: str, prompt: str, workflow_path: str) -> str:
         """Create a new task.
@@ -766,6 +786,49 @@ class TaskManager:
                 return True
             return False
 
+    def register_video_file(self, video_id: str, file_path: str, created_at: float = None):
+        """Register a video file for lazy cleanup.
+
+        Args:
+            video_id: Video ID (task ID)
+            file_path: Path to the video file
+            created_at: Creation timestamp (defaults to current time)
+        """
+        with self.lock:
+            self.video_files[video_id] = {
+                'file_path': file_path,
+                'created_at': created_at or time.time()
+            }
+
+    def cleanup_video_file(self, video_id: str) -> bool:
+        """Clean up a specific video file.
+
+        Args:
+            video_id: Video ID
+
+        Returns:
+            True if file was cleaned up, False if not found
+        """
+        import os
+        with self.lock:
+            if video_id in self.video_files:
+                file_info = self.video_files[video_id]
+                file_path = file_info['file_path']
+
+                # Remove from tracking
+                del self.video_files[video_id]
+
+                # Delete the file if it exists
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        print(f"Cleaned up video file: {file_path}")
+                        return True
+                except Exception as e:
+                    print(f"Failed to clean up video file {file_path}: {e}")
+
+            return False
+
     def _cleanup_old_tasks(self):
         """Clean up old tasks to prevent memory leak."""
         while True:
@@ -783,6 +846,45 @@ class TaskManager:
 
                 if tasks_to_delete:
                     print(f"Cleaned up {len(tasks_to_delete)} old tasks")
+
+    def _cleanup_old_video_files(self):
+        """Lazy cleanup of old video files.
+
+        Strategy:
+        1. All video files are cleaned up after a specified timeout (default: 1 hour)
+        2. Run cleanup every 30 minutes
+        """
+        import os
+        VIDEO_FILE_TIMEOUT = 3600  # 1 hour timeout for all video files
+
+        while True:
+            time.sleep(1800)  # Run every 30 minutes
+
+            with self.lock:
+                current_time = time.time()
+                files_to_cleanup = []
+
+                for video_id, file_info in self.video_files.items():
+                    file_path = file_info['file_path']
+                    created_at = file_info['created_at']
+
+                    # Check if file exists
+                    if not os.path.exists(file_path):
+                        files_to_cleanup.append(video_id)
+                        continue
+
+                    # Clean up files older than the timeout
+                    if current_time - created_at > VIDEO_FILE_TIMEOUT:
+                        files_to_cleanup.append(video_id)
+
+                # Clean up files
+                cleaned_count = 0
+                for video_id in files_to_cleanup:
+                    if self.cleanup_video_file(video_id):
+                        cleaned_count += 1
+
+                if cleaned_count > 0:
+                    print(f"Lazy cleanup: cleaned up {cleaned_count} video files (timeout: {VIDEO_FILE_TIMEOUT}s)")
 
 
 # Global task manager instance
