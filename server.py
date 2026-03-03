@@ -94,21 +94,77 @@ def modify_workflow_prompt(workflow_json, positive_prompt, negative_prompt=''):
     if 'seed' in prompt.get(sampler, {}).get('inputs', {}):
         prompt[sampler]['inputs']['seed'] = random.randint(10**14, 10**15 - 1)
 
+    def find_and_update_prompt(target_node_id, prompt_text, prompt_type='positive'):
+        """Find and update prompt text in the workflow."""
+        if target_node_id not in prompt:
+            return False
+
+        target_node = prompt[target_node_id]
+
+        # Case 1: Direct text input in the target node
+        if 'text' in target_node.get('inputs', {}):
+            # Check if text is a string (direct text) or a list (reference to another node)
+            text_input = target_node['inputs']['text']
+            if isinstance(text_input, str):
+                # Direct text string - update it
+                target_node['inputs']['text'] = prompt_text
+                return True
+            elif isinstance(text_input, list) and len(text_input) > 0:
+                # Reference to another node - follow the reference
+                text_node_id = text_input[0]
+                if text_node_id in prompt:
+                    text_node = prompt[text_node_id]
+                    # Check what type of node this is
+                    if text_node.get('class_type') == 'PrimitiveStringMultiline' and 'value' in text_node.get('inputs', {}):
+                        # Update PrimitiveStringMultiline node
+                        text_node['inputs']['value'] = prompt_text
+                        return True
+                    elif 'text' in text_node.get('inputs', {}):
+                        # Recursive call
+                        return find_and_update_prompt(text_node_id, prompt_text, prompt_type)
+
+        # Case 2: Target node is CLIPTextEncode but text is a reference
+        if target_node.get('class_type') == 'CLIPTextEncode' and 'text' in target_node.get('inputs', {}):
+            text_input = target_node['inputs']['text']
+            if isinstance(text_input, list) and len(text_input) > 0:
+                text_node_id = text_input[0]
+                return find_and_update_prompt(text_node_id, prompt_text, prompt_type)
+
+        # Case 3: Search for CLIPTextEncode nodes with specific metadata
+        if prompt_type == 'positive':
+            search_keywords = ['positive', 'prompt']
+        else:
+            search_keywords = ['negative']
+
+        for node_id, node_data in prompt.items():
+            if node_data.get('class_type') == 'CLIPTextEncode':
+                meta_title = node_data.get('_meta', {}).get('title', '').lower()
+                if any(keyword in meta_title for keyword in search_keywords):
+                    if 'text' in node_data.get('inputs', {}):
+                        text_input = node_data['inputs']['text']
+                        if isinstance(text_input, str):
+                            node_data['inputs']['text'] = prompt_text
+                            return True
+                        elif isinstance(text_input, list) and len(text_input) > 0:
+                            text_node_id = text_input[0]
+                            if find_and_update_prompt(text_node_id, prompt_text, prompt_type):
+                                return True
+
+        return False
+
     # Update positive prompt
     if 'positive' in prompt[sampler]['inputs']:
         positive_input = prompt[sampler]['inputs']['positive']
         if isinstance(positive_input, list) and len(positive_input) > 0:
             positive_node_id = positive_input[0]
-            if positive_node_id in prompt and 'text' in prompt[positive_node_id]['inputs']:
-                prompt[positive_node_id]['inputs']['text'] = positive_prompt
+            find_and_update_prompt(positive_node_id, positive_prompt, 'positive')
 
     # Update negative prompt
     if negative_prompt and 'negative' in prompt[sampler]['inputs']:
         negative_input = prompt[sampler]['inputs']['negative']
         if isinstance(negative_input, list) and len(negative_input) > 0:
             negative_node_id = negative_input[0]
-            if negative_node_id in prompt and 'text' in prompt[negative_node_id]['inputs']:
-                prompt[negative_node_id]['inputs']['text'] = negative_prompt
+            find_and_update_prompt(negative_node_id, negative_prompt, 'negative')
 
     return prompt
 

@@ -14,7 +14,7 @@
   },
   "58": {
     "inputs": {
-      "value": "Latina female with thick wavy hair, harbor boats and pastel houses behind. Breezy seaside light, warm tones, cinematic close-up. "
+      "value": "positive_prompt_placeholder"
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
