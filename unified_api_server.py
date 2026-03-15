@@ -557,7 +557,10 @@ def get_video_status(video_id: str):
                         'status': job_data['status'],
                         'progress': 0,  # Progress tracking would need to be implemented
                         'error': job_data.get('error'),
-                        'created_at': job_data['created_at']
+                        'created_at': job_data['created_at'],
+                        'model': model_name,
+                        'seconds': str(job_data.get('request_data', {}).get('seconds', 4)),
+                        'size': job_data.get('request_data', {}).get('size', '768x512'),
                     }
                     break
 
@@ -586,7 +589,10 @@ def get_video_status(video_id: str):
             'status': status_map.get(task.status, "unknown"),
             'progress': task.progress,
             'error': task.error,
-            'created_at': task.created_at
+            'created_at': task.created_at,
+            'model': 'sora-2',
+            'seconds': '4',
+            'size': '768x512',
         }
 
     # Create response
@@ -595,10 +601,10 @@ def get_video_status(video_id: str):
         "object": "video",
         "created_at": int(video_status['created_at']),
         "status": video_status['status'],
-        "model": "sora-2",  # Default, could be determined from job data
+        "model": video_status.get('model', 'sora-2'),
         "progress": video_status['progress'],
-        "seconds": "4",  # Default
-        "size": "768x512"  # Default
+        "seconds": video_status.get('seconds', '4'),
+        "size": video_status.get('size', '768x512')
     }
 
     # Add error if failed

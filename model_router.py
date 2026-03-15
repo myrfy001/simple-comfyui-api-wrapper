@@ -301,6 +301,8 @@ class VideoModelBackendConfig(ModelBackendConfig):
             request_data = job_data['request_data']
             prompt = request_data.get('prompt', '')
             input_image_base64 = request_data.get('input_image_base64')
+            size = request_data.get('size', self.fixed_size)
+            seconds = request_data.get('seconds', self.fixed_seconds)
 
             # Update job status
             with self.backend_lock:
@@ -317,6 +319,8 @@ class VideoModelBackendConfig(ModelBackendConfig):
                 server_address=backend['address'],
                 task_id=job_data['job_id'],  # Pass job ID for cleanup tracking
                 input_image_base64=input_image_base64,
+                size=size,
+                seconds=seconds,
             )
 
             # Update job result

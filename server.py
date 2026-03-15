@@ -718,6 +718,66 @@ def update_workflow_size(workflow_json, size_str):
   return json.dumps(workflow)
 
 
+def update_video_workflow_params(workflow_json, size_str=None, seconds=None):
+    """Update size and length-related parameters in a video workflow JSON string.
+
+    Args:
+        workflow_json: JSON string of the workflow
+        size_str: Optional size string in format "WIDTHxHEIGHT"
+        seconds: Optional video duration in seconds
+
+    Returns:
+        Modified workflow JSON string
+    """
+    workflow = json.loads(workflow_json)
+
+    width = None
+    height = None
+    if size_str is not None:
+        match = re.match(r'^(\d+)x(\d+)$', str(size_str))
+        if not match:
+            raise ValueError(f"Invalid size format: '{size_str}'. Expected format: 'WIDTHxHEIGHT'")
+        width = int(match.group(1))
+        height = int(match.group(2))
+
+    seconds_int = None
+    if seconds is not None:
+        seconds_int = int(seconds)
+        if seconds_int <= 0:
+            raise ValueError("'seconds' must be a positive integer")
+
+    for node_data in workflow.values():
+        if not isinstance(node_data, dict):
+            continue
+
+        class_type = node_data.get('class_type', '')
+        inputs = node_data.get('inputs', {})
+        if not isinstance(inputs, dict):
+            continue
+
+        if width is not None and height is not None:
+            if class_type in ('LTXVImgToVideo', 'EmptyLTXVLatentVideo', 'EmptySD3LatentImage'):
+                if 'width' in inputs:
+                    inputs['width'] = width
+                if 'height' in inputs:
+                    inputs['height'] = height
+
+        if seconds_int is not None and class_type in ('LTXVImgToVideo', 'EmptyLTXVLatentVideo'):
+            # Use existing frame-rate if available; keep original value when missing.
+            fps = 24
+            for fps_candidate in ('frame_rate', 'fps'):
+                if isinstance(inputs.get(fps_candidate), (int, float)) and inputs[fps_candidate] > 0:
+                    fps = int(inputs[fps_candidate])
+                    break
+
+            # LTX workflows usually use odd frame length (e.g., 49). Keep that convention.
+            frame_length = max(9, seconds_int * fps + 1)
+            if 'length' in inputs:
+                inputs['length'] = frame_length
+
+    return json.dumps(workflow)
+
+
 def generate_image_in_memory(prompt_text, workflow_path="z_image_turbo.json", server_address="127.0.0.1:8188", size=None):
     """Generate image from prompt and return image bytes.
 
@@ -761,6 +821,8 @@ def prompt_to_video(
     server_address='127.0.0.1:8188',
     task_id=None,
     input_image_base64=None,
+    size=None,
+    seconds=None,
 ):
     """Generate video from prompt using video workflow.
 
@@ -771,10 +833,13 @@ def prompt_to_video(
         return_videos: Whether to return video bytes instead of saving
         server_address: ComfyUI server address
         task_id: Optional task ID for video cleanup tracking
+        size: Optional output size string in format WIDTHxHEIGHT
+        seconds: Optional video duration in seconds
 
     Returns:
         List of video bytes if return_videos=True, otherwise None
     """
+    workflow = update_video_workflow_params(workflow, size_str=size, seconds=seconds)
     prompt = modify_workflow_prompt(workflow, positive_prompt, negative_prompt)
 
     # Optional I2V path: upload base64 image to ComfyUI and inject file name into workflow.
@@ -800,6 +865,8 @@ def generate_video_in_memory(
     server_address="127.0.0.1:8188",
     task_id=None,
     input_image_base64=None,
+    size=None,
+    seconds=None,
 ):
     """Generate video from prompt and return video bytes.
 
@@ -832,8 +899,10 @@ def generate_video_in_memory(
             negative_prompt='',
             return_videos=True,
             server_address=server_address,
-            task_id=task_id
-            ,input_image_base64=input_image_base64
+            task_id=task_id,
+            input_image_base64=input_image_base64,
+            size=size,
+            seconds=seconds,
         )
 
         logging.info(f"[generate_video_in_memory] prompt_to_video returned {len(video_bytes_list) if video_bytes_list else 0} videos")
