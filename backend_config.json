@@ -13,6 +13,7 @@
     "my_ltx_video": {
       "description": "ltx-video",
       "workflow": "ltx-video-t2v.json",
+      "i2v_workflow": "ltx-video-i2v.json",
       "backends": [
         "127.0.0.1:8188",
         "127.0.0.1:8188"

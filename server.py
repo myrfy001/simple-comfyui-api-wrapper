@@ -5,6 +5,8 @@ import websocket
 import uuid
 import json
 import re
+import base64
+from collections import deque
 import urllib.request
 import urllib.parse
 import random
@@ -51,6 +53,190 @@ def upload_image(input_path, name, server_address, image_type="input", overwrite
     request = urllib.request.Request("http://{}/upload/image".format(server_address), data=data, headers=headers)
     with urllib.request.urlopen(request) as response:
       return response.read()
+
+
+def upload_image_bytes(image_bytes, name, server_address, image_type="input", overwrite=False):
+    """Upload raw image bytes to ComfyUI input folder."""
+    image_stream = io.BytesIO(image_bytes)
+    multipart_data = MultipartEncoder(
+        fields={
+            'image': (name, image_stream, 'image/png'),
+            'type': image_type,
+            'overwrite': str(overwrite).lower()
+        }
+    )
+
+    headers = {'Content-Type': multipart_data.content_type}
+    request = urllib.request.Request(
+        "http://{}/upload/image".format(server_address),
+        data=multipart_data,
+        headers=headers
+    )
+    with urllib.request.urlopen(request) as response:
+        return response.read()
+
+
+def _normalize_base64_image_to_png_bytes(image_base64):
+    """Decode a base64/data-url image string and normalize it to PNG bytes."""
+    if not isinstance(image_base64, str) or not image_base64.strip():
+        raise ValueError("input_reference.image_url must be a non-empty base64/data URL string")
+
+    image_str = image_base64.strip()
+    if image_str.startswith('data:'):
+        if ',' not in image_str:
+            raise ValueError("Invalid data URL format for input_reference.image_url")
+        image_str = image_str.split(',', 1)[1]
+
+    try:
+        raw_bytes = base64.b64decode(image_str, validate=True)
+    except Exception as exc:
+        raise ValueError(f"Invalid base64 image data: {exc}") from exc
+
+    try:
+        with Image.open(io.BytesIO(raw_bytes)) as img:
+            if img.mode not in ('RGB', 'RGBA'):
+                img = img.convert('RGB')
+
+            buffer = io.BytesIO()
+            img.save(buffer, format='PNG')
+            return buffer.getvalue()
+    except Exception as exc:
+        raise ValueError(f"Invalid image content in base64 payload: {exc}") from exc
+
+
+def upload_base64_image_to_comfyui(image_base64, server_address):
+    """Upload a base64 image to ComfyUI and return the uploaded filename."""
+    image_png_bytes = _normalize_base64_image_to_png_bytes(image_base64)
+    image_name = f"i2v_{uuid.uuid4().hex}.png"
+    upload_image_bytes(image_png_bytes, image_name, server_address, image_type='input', overwrite=True)
+    return image_name
+
+
+def _build_forward_graph(prompt_dict):
+    """Build forward dependency graph: src_node_id -> set(dest_node_id)."""
+    graph = {str(node_id): set() for node_id in prompt_dict.keys()}
+
+    for dest_node_id, node_data in prompt_dict.items():
+        if not isinstance(node_data, dict):
+            continue
+        inputs = node_data.get('inputs', {})
+        if not isinstance(inputs, dict):
+            continue
+
+        for value in inputs.values():
+            if isinstance(value, list) and value:
+                src_node_id = str(value[0])
+                if src_node_id in graph:
+                    graph[src_node_id].add(str(dest_node_id))
+
+    return graph
+
+
+def _is_any_node_reaching_targets(prompt_dict, source_node_ids, target_class_types):
+    """Check whether any source node can reach target class types through workflow links."""
+    if not source_node_ids:
+        return False
+
+    graph = _build_forward_graph(prompt_dict)
+    target_nodes = {
+        str(node_id)
+        for node_id, node_data in prompt_dict.items()
+        if str(node_data.get('class_type', '')) in target_class_types
+    }
+
+    if not target_nodes:
+        return False
+
+    visited = set()
+    queue = deque(str(node_id) for node_id in source_node_ids)
+
+    while queue:
+        current = queue.popleft()
+        if current in visited:
+            continue
+        visited.add(current)
+
+        if current in target_nodes:
+            return True
+
+        for nxt in graph.get(current, set()):
+            if nxt not in visited:
+                queue.append(nxt)
+
+    return False
+
+
+def inject_image_into_workflow(prompt_dict, image_name):
+    """Inject uploaded image filename into image-loading nodes of a workflow."""
+    injected = False
+    injected_node_ids = []
+
+    for node_id, node_data in prompt_dict.items():
+        if not isinstance(node_data, dict):
+            continue
+
+        class_type = str(node_data.get('class_type', '')).lower()
+        inputs = node_data.get('inputs', {})
+        if not isinstance(inputs, dict):
+            continue
+
+        # Prefer standard ComfyUI image loader style nodes.
+        if 'loadimage' in class_type:
+            if 'image' in inputs:
+                inputs['image'] = image_name
+                injected = True
+                injected_node_ids.append(str(node_id))
+            elif 'image_path' in inputs:
+                inputs['image_path'] = image_name
+                injected = True
+                injected_node_ids.append(str(node_id))
+            elif 'path' in inputs:
+                inputs['path'] = image_name
+                injected = True
+                injected_node_ids.append(str(node_id))
+
+    if not injected:
+        raise ValueError(
+            "Workflow does not support image-conditioned video: no compatible load-image node found"
+        )
+
+    # Prevent silent fallback to T2V when image nodes exist but are disconnected.
+    reaches_sampler = _is_any_node_reaching_targets(
+        prompt_dict,
+        injected_node_ids,
+        {'KSampler', 'SamplerCustom', 'KSamplerAdvanced'}
+    )
+    if not reaches_sampler:
+        raise ValueError(
+            "Reference image node is not connected to the sampler path. "
+            "Please use an actual I2V workflow where LoadImage affects generation."
+        )
+
+    return prompt_dict
+
+
+def apply_i2v_preservation_defaults(prompt_dict):
+    """Apply conservative defaults to keep output closer to reference image for I2V workflows."""
+    for node_data in prompt_dict.values():
+        if not isinstance(node_data, dict):
+            continue
+
+        class_type = str(node_data.get('class_type', '')).lower()
+        inputs = node_data.get('inputs', {})
+        if not isinstance(inputs, dict):
+            continue
+
+        # In samplers, lower denoise tends to preserve structure from reference latents.
+        if class_type in {'ksampler', 'ksampleradvanced'} and isinstance(inputs.get('denoise'), (int, float)):
+            inputs['denoise'] = min(float(inputs['denoise']), 0.45)
+
+        # Heuristically strengthen common reference/image conditioning scales.
+        if any(token in class_type for token in ('image', 'reference', 'ipadapter', 'control')):
+            for key in ('image_strength', 'reference_strength', 'conditioning_strength'):
+                if isinstance(inputs.get(key), (int, float)):
+                    inputs[key] = max(float(inputs[key]), 0.85)
+
+    return prompt_dict
     
 def load_workflow(workflow_path):
   try:
@@ -567,7 +753,15 @@ def generate_image_in_memory(prompt_text, workflow_path="z_image_turbo.json", se
         raise RuntimeError("No images generated")
 
 
-def prompt_to_video(workflow, positive_prompt, negative_prompt='', return_videos=False, server_address='127.0.0.1:8188', task_id=None):
+def prompt_to_video(
+    workflow,
+    positive_prompt,
+    negative_prompt='',
+    return_videos=False,
+    server_address='127.0.0.1:8188',
+    task_id=None,
+    input_image_base64=None,
+):
     """Generate video from prompt using video workflow.
 
     Args:
@@ -582,6 +776,13 @@ def prompt_to_video(workflow, positive_prompt, negative_prompt='', return_videos
         List of video bytes if return_videos=True, otherwise None
     """
     prompt = modify_workflow_prompt(workflow, positive_prompt, negative_prompt)
+
+    # Optional I2V path: upload base64 image to ComfyUI and inject file name into workflow.
+    if input_image_base64:
+        uploaded_image_name = upload_base64_image_to_comfyui(input_image_base64, server_address)
+        prompt = inject_image_into_workflow(prompt, uploaded_image_name)
+        prompt = apply_i2v_preservation_defaults(prompt)
+
     return generate_by_prompt(
         prompt=prompt,
         server_address=server_address,
@@ -593,7 +794,13 @@ def prompt_to_video(workflow, positive_prompt, negative_prompt='', return_videos
     )
 
 
-def generate_video_in_memory(prompt_text, workflow_path="ltx-video-t2v.json", server_address="127.0.0.1:8188", task_id=None):
+def generate_video_in_memory(
+    prompt_text,
+    workflow_path="ltx-video-t2v.json",
+    server_address="127.0.0.1:8188",
+    task_id=None,
+    input_image_base64=None,
+):
     """Generate video from prompt and return video bytes.
 
     Args:
@@ -626,6 +833,7 @@ def generate_video_in_memory(prompt_text, workflow_path="ltx-video-t2v.json", se
             return_videos=True,
             server_address=server_address,
             task_id=task_id
+            ,input_image_base64=input_image_base64
         )
 
         logging.info(f"[generate_video_in_memory] prompt_to_video returned {len(video_bytes_list) if video_bytes_list else 0} videos")
