@@ -136,7 +136,14 @@ def generate_video_example():
 
                             if download_response.status_code == 200:
                                 video_bytes = download_response.content
-                                filename = f"generated_video_{model.replace('-', '_')}.webp"
+                                content_type = download_response.headers.get("Content-Type", "")
+                                is_mp4_magic = len(video_bytes) >= 8 and video_bytes[4:8] == b'ftyp'
+
+                                if "video/mp4" not in content_type.lower() and not is_mp4_magic:
+                                    print(f"  ✗ Unexpected video format: Content-Type={content_type}")
+                                    break
+
+                                filename = f"generated_video_{model.replace('-', '_')}.mp4"
 
                                 with open(filename, 'wb') as f:
                                     f.write(video_bytes)

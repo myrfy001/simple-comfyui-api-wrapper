@@ -154,6 +154,97 @@ def validate_size(size: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def parse_video_input_image(data: Dict[str, Any]) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Parse optional I2V image input from request body.
+
+    Supported inputs:
+    1) OpenAI-style: input_reference.image_url (base64/data-url string)
+    2) Compatibility: image (base64/data-url string)
+    """
+    input_reference = data.get("input_reference")
+    image_value = data.get("image")
+
+    if input_reference is not None and image_value is not None:
+        return None, {
+            "error": {
+                "message": "Use either 'input_reference' or 'image', not both",
+                "type": "invalid_request_error",
+                "param": "input_reference",
+                "code": "invalid_value"
+            }
+        }
+
+    if input_reference is None and image_value is None:
+        return None, None
+
+    if image_value is not None:
+        if not isinstance(image_value, str) or not image_value.strip():
+            return None, {
+                "error": {
+                    "message": "'image' must be a non-empty base64/data-url string",
+                    "type": "invalid_request_error",
+                    "param": "image",
+                    "code": "invalid_type"
+                }
+            }
+        return image_value.strip(), None
+
+    if not isinstance(input_reference, dict):
+        return None, {
+            "error": {
+                "message": "'input_reference' must be an object",
+                "type": "invalid_request_error",
+                "param": "input_reference",
+                "code": "invalid_type"
+            }
+        }
+
+    image_url = input_reference.get("image_url")
+    file_id = input_reference.get("file_id")
+
+    if image_url and file_id:
+        return None, {
+            "error": {
+                "message": "Provide exactly one of input_reference.image_url or input_reference.file_id",
+                "type": "invalid_request_error",
+                "param": "input_reference",
+                "code": "invalid_value"
+            }
+        }
+
+    if file_id:
+        return None, {
+            "error": {
+                "message": "'input_reference.file_id' is not supported yet; use input_reference.image_url with base64/data-url",
+                "type": "invalid_request_error",
+                "param": "input_reference.file_id",
+                "code": "unsupported_value"
+            }
+        }
+
+    if not image_url:
+        return None, {
+            "error": {
+                "message": "'input_reference.image_url' is required for Image-to-Video",
+                "type": "invalid_request_error",
+                "param": "input_reference.image_url",
+                "code": "missing_field"
+            }
+        }
+
+    if not isinstance(image_url, str) or not image_url.strip():
+        return None, {
+            "error": {
+                "message": "'input_reference.image_url' must be a non-empty base64/data-url string",
+                "type": "invalid_request_error",
+                "param": "input_reference.image_url",
+                "code": "invalid_type"
+            }
+        }
+
+    return image_url.strip(), None
+
+
 # ========== Images API Endpoints ==========
 
 @app.route('/v1/images/generations', methods=['POST'])
@@ -326,11 +417,54 @@ def images_generations():
 @app.route('/v1/videos', methods=['POST'])
 def create_video():
     """Create a new video generation job with model-based routing."""
-    # Validate JSON
-    json_result = validate_request_json()
-    if isinstance(json_result, dict) and "error" in json_result:
-        return jsonify(json_result), 400
-    data = json_result
+    input_image_base64 = None
+
+    if request.is_json:
+        # JSON mode (backward compatible): accepts input_reference.image_url base64/data-url
+        json_result = validate_request_json()
+        if isinstance(json_result, dict) and "error" in json_result:
+            return jsonify(json_result), 400
+        data = json_result
+
+        # Optional I2V source image (base64/data-url)
+        input_image_base64, input_image_error = parse_video_input_image(data)
+        if input_image_error:
+            return jsonify(input_image_error), 400
+    else:
+        # Multipart mode (OpenAI SDK videos.create): accepts file in `input_reference`
+        content_type = (request.content_type or "").lower()
+        if "multipart/form-data" not in content_type:
+            return jsonify({
+                "error": {
+                    "message": "Content-Type must be application/json or multipart/form-data",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": "invalid_content_type"
+                }
+            }), 400
+
+        data = {
+            "prompt": request.form.get("prompt"),
+            "model": request.form.get("model", "sora-2"),
+            "size": request.form.get("size", "768x512"),
+            "seconds": request.form.get("seconds", 4),
+        }
+
+        upload = request.files.get("input_reference") or request.files.get("image")
+        if upload and upload.filename:
+            image_bytes = upload.read()
+            if not image_bytes:
+                return jsonify({
+                    "error": {
+                        "message": "Uploaded input_reference file is empty",
+                        "type": "invalid_request_error",
+                        "param": "input_reference",
+                        "code": "empty_field"
+                    }
+                }), 400
+
+            mime_type = upload.mimetype or "application/octet-stream"
+            input_image_base64 = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
 
     # Validate required fields
     prompt_error = validate_prompt(data)
@@ -397,6 +531,7 @@ def create_video():
             'model': resolved_model,
             'size': size,
             'seconds': seconds,
+            'input_image_base64': input_image_base64,
         }
 
         # Add request to model backend
@@ -460,7 +595,10 @@ def get_video_status(video_id: str):
                         'status': job_data['status'],
                         'progress': 0,  # Progress tracking would need to be implemented
                         'error': job_data.get('error'),
-                        'created_at': job_data['created_at']
+                        'created_at': job_data['created_at'],
+                        'model': model_name,
+                        'seconds': str(job_data.get('request_data', {}).get('seconds', 4)),
+                        'size': job_data.get('request_data', {}).get('size', '768x512'),
                     }
                     break
 
@@ -489,7 +627,10 @@ def get_video_status(video_id: str):
             'status': status_map.get(task.status, "unknown"),
             'progress': task.progress,
             'error': task.error,
-            'created_at': task.created_at
+            'created_at': task.created_at,
+            'model': 'sora-2',
+            'seconds': '4',
+            'size': '768x512',
         }
 
     # Create response
@@ -498,10 +639,10 @@ def get_video_status(video_id: str):
         "object": "video",
         "created_at": int(video_status['created_at']),
         "status": video_status['status'],
-        "model": "sora-2",  # Default, could be determined from job data
+        "model": video_status.get('model', 'sora-2'),
         "progress": video_status['progress'],
-        "seconds": "4",  # Default
-        "size": "768x512"  # Default
+        "seconds": video_status.get('seconds', '4'),
+        "size": video_status.get('size', '768x512')
     }
 
     # Add error if failed
@@ -565,8 +706,19 @@ def get_video_content(video_id: str):
 
         video_data = task.result
 
-    # Determine file extension
-    file_extension = "webp"  # ltx-video-t2v.json uses SaveAnimatedWEBP
+    # Determine file extension from file signature (magic bytes)
+    file_extension = "bin"
+    mimetype = "application/octet-stream"
+
+    # MP4 usually has 'ftyp' at bytes 4..8
+    if len(video_data) >= 12 and video_data[4:8] == b'ftyp':
+        file_extension = "mp4"
+        mimetype = "video/mp4"
+    # WEBP usually starts with RIFF....WEBP
+    elif len(video_data) >= 12 and video_data[0:4] == b'RIFF' and video_data[8:12] == b'WEBP':
+        file_extension = "webp"
+        mimetype = "image/webp"
+
     filename = f"video_{video_id}.{file_extension}"
 
     # Create BytesIO object
@@ -576,7 +728,7 @@ def get_video_content(video_id: str):
     # Return as file download
     return send_file(
         video_io,
-        mimetype=f"image/{file_extension}",  # WEBP is technically an image format
+        mimetype=mimetype,
         as_attachment=True,
         download_name=filename
     )

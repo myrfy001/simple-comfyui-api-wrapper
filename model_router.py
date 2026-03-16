@@ -20,6 +20,7 @@ class ModelBackendConfig:
         self.model_name = model_name
         self.description = config_data.get('description', '')
         self.workflow = config_data.get('workflow', '')
+        self.i2v_workflow = config_data.get('i2v_workflow', '')
         self.backend_addresses = config_data.get('backends', [])
         self.fixed_size = config_data.get('fixed_size', '256x256')
         self.default_model = config_data.get('default_model', model_name)
@@ -299,6 +300,9 @@ class VideoModelBackendConfig(ModelBackendConfig):
         try:
             request_data = job_data['request_data']
             prompt = request_data.get('prompt', '')
+            input_image_base64 = request_data.get('input_image_base64')
+            size = request_data.get('size', self.fixed_size)
+            seconds = request_data.get('seconds', self.fixed_seconds)
 
             # Update job status
             with self.backend_lock:
@@ -308,11 +312,15 @@ class VideoModelBackendConfig(ModelBackendConfig):
             logging.info(f"Processing video job {job_data['job_id']} on backend {backend['id']}")
 
             # Generate video
+            workflow_path = self.i2v_workflow if (input_image_base64 and self.i2v_workflow) else self.workflow
             video_bytes = self.generate_video_in_memory(
                 prompt_text=prompt,
-                workflow_path=self.workflow,
+                workflow_path=workflow_path,
                 server_address=backend['address'],
-                task_id=job_data['job_id']  # Pass job ID for cleanup tracking
+                task_id=job_data['job_id'],  # Pass job ID for cleanup tracking
+                input_image_base64=input_image_base64,
+                size=size,
+                seconds=seconds,
             )
 
             # Update job result
