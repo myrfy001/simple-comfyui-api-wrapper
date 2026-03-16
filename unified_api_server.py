@@ -417,11 +417,54 @@ def images_generations():
 @app.route('/v1/videos', methods=['POST'])
 def create_video():
     """Create a new video generation job with model-based routing."""
-    # Validate JSON
-    json_result = validate_request_json()
-    if isinstance(json_result, dict) and "error" in json_result:
-        return jsonify(json_result), 400
-    data = json_result
+    input_image_base64 = None
+
+    if request.is_json:
+        # JSON mode (backward compatible): accepts input_reference.image_url base64/data-url
+        json_result = validate_request_json()
+        if isinstance(json_result, dict) and "error" in json_result:
+            return jsonify(json_result), 400
+        data = json_result
+
+        # Optional I2V source image (base64/data-url)
+        input_image_base64, input_image_error = parse_video_input_image(data)
+        if input_image_error:
+            return jsonify(input_image_error), 400
+    else:
+        # Multipart mode (OpenAI SDK videos.create): accepts file in `input_reference`
+        content_type = (request.content_type or "").lower()
+        if "multipart/form-data" not in content_type:
+            return jsonify({
+                "error": {
+                    "message": "Content-Type must be application/json or multipart/form-data",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": "invalid_content_type"
+                }
+            }), 400
+
+        data = {
+            "prompt": request.form.get("prompt"),
+            "model": request.form.get("model", "sora-2"),
+            "size": request.form.get("size", "768x512"),
+            "seconds": request.form.get("seconds", 4),
+        }
+
+        upload = request.files.get("input_reference") or request.files.get("image")
+        if upload and upload.filename:
+            image_bytes = upload.read()
+            if not image_bytes:
+                return jsonify({
+                    "error": {
+                        "message": "Uploaded input_reference file is empty",
+                        "type": "invalid_request_error",
+                        "param": "input_reference",
+                        "code": "empty_field"
+                    }
+                }), 400
+
+            mime_type = upload.mimetype or "application/octet-stream"
+            input_image_base64 = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
 
     # Validate required fields
     prompt_error = validate_prompt(data)
@@ -433,11 +476,6 @@ def create_video():
     model = data.get("model", "sora-2")
     size = data.get("size", "768x512")
     seconds = data.get("seconds", 4)
-
-    # Optional I2V source image (base64/data-url)
-    input_image_base64, input_image_error = parse_video_input_image(data)
-    if input_image_error:
-        return jsonify(input_image_error), 400
 
     # Validate size parameter
     size_error = validate_size(size)
